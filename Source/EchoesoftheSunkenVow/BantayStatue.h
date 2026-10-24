@@ -32,6 +32,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bantay")
         float RequiredFacingDot;
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Bantay")
+        bool bIsActivated;
+
     UFUNCTION()
         void ActivateCheckpoint();
 

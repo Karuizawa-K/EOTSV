@@ -23,6 +23,7 @@ ABantayStatue::ABantayStatue()
 
     InteractionDistance = 250.0f;
     RequiredFacingDot = 0.5f;
+    bIsActivated = false;
 }
 
 void ABantayStatue::BeginPlay()
@@ -37,5 +38,7 @@ void ABantayStatue::Tick(float DeltaTime)
 
 void ABantayStatue::ActivateCheckpoint()
 {
+    bIsActivated = true;
+
     UE_LOG(LogTemp, Warning, TEXT("Bantay checkpoint activated: %s"), *GetName());
 }
