@@ -14,3 +14,7 @@ Saved/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Miscellaneous
+agents.md
+GDD_Revised.docx
