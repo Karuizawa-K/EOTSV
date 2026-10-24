@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -7,6 +6,7 @@
 
 class UInputComponent;
 class UCombatComponent;
+class UStatsComponent;
 
 UCLASS()
 class ECHOESOFTHESUNKENVOW_API AMC : public ACharacter
@@ -30,4 +30,8 @@ protected:
 public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
     UCombatComponent* CombatComponent;
+    UStatsComponent* StatsComponent;
+
+    UFUNCTION(BlueprintCallable, Category = "Combat")
+        void TakeCombatDamage(float DamageAmount);
 };

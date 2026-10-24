@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -16,8 +15,8 @@ public:
     ABaseEnemy();
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
-        UStatsComponent* StatsComponent;
+    UStatsComponent* StatsComponent;
 
     UFUNCTION(BlueprintCallable, Category = "Combat")
-        void TakeCombatDamage(float DamageAmount);
+    void TakeCombatDamage(float DamageAmount);
 };

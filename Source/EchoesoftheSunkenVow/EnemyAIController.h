@@ -14,12 +14,17 @@ public:
     AEnemyAIController();
 
     virtual void BeginPlay() override;
-
     virtual void Tick(float DeltaSeconds) override;
 
 private:
     void FindAndChasePlayer();
+    void AttackPlayer();
 
     UPROPERTY()
         APawn* TargetPlayer;
+
+    float AttackCooldown;
+    float AttackTimer;
+
+    float AttackRange;
 };

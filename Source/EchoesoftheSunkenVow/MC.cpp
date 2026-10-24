@@ -1,9 +1,10 @@
-
 #include "MC.h"
 #include "CombatComponent.h"
+#include "StatsComponent.h"
 #include "Components/InputComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 
 AMC::AMC()
 {
@@ -12,6 +13,8 @@ AMC::AMC()
     CombatComponent = CreateDefaultSubobject<UCombatComponent>(
         TEXT("CombatComponent")
         );
+
+    StatsComponent = CreateDefaultSubobject<UStatsComponent>(TEXT("StatsComponent"));
 
     // Allow the controller to rotate the character.
     bUseControllerRotationYaw = false;
@@ -107,5 +110,37 @@ void AMC::AttackPressed()
     if (CombatComponent)
     {
         CombatComponent->LightAttack();
+    }
+}
+
+
+void AMC::TakeCombatDamage(float DamageAmount)
+{
+    if (!StatsComponent || StatsComponent->bIsDead)
+    {
+        return;
+    }
+
+    StatsComponent->ApplyDamage(DamageAmount);
+
+    if (StatsComponent->bIsDead)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Player defeated!"));
+
+        // Stop player movement.
+        GetCharacterMovement()->DisableMovement();
+
+        // Stop the player's controller movement commands.
+
+        if (APlayerController* PlayerController =
+            Cast<APlayerController>(GetController()))
+        {
+            PlayerController->StopMovement();
+            DisableInput(PlayerController);
+        }
+
+
+        // Prevent further collisions.
+        SetActorEnableCollision(false);
     }
 }

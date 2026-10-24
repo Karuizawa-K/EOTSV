@@ -2,18 +2,23 @@
 #include "EnemyAIController.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Pawn.h"
+#include "MC.h"
 
 AEnemyAIController::AEnemyAIController()
 {
     PrimaryActorTick.bCanEverTick = true;
+
     TargetPlayer = nullptr;
+
+    AttackCooldown = 1.5f;
+    AttackTimer = 0.0f;
+    AttackRange = 200.0f;
 }
 
 void AEnemyAIController::BeginPlay()
 {
     Super::BeginPlay();
 
-    UE_LOG(LogTemp, Warning, TEXT("[EnemyAI] Controller started."));
     FindAndChasePlayer();
 }
 
@@ -27,10 +32,29 @@ void AEnemyAIController::Tick(float DeltaSeconds)
         return;
     }
 
-    // Reissue the chase if the player is not already being pursued.
-    if (GetMoveStatus() != EPathFollowingStatus::Moving)
+    const float Distance = FVector::Dist(
+        GetPawn()->GetActorLocation(),
+        TargetPlayer->GetActorLocation()
+    );
+
+    if (Distance <= AttackRange)
     {
-        FindAndChasePlayer();
+        StopMovement();
+
+        AttackTimer -= DeltaSeconds;
+
+        if (AttackTimer <= 0.0f)
+        {
+            AttackPlayer();
+            AttackTimer = AttackCooldown;
+        }
+    }
+    else
+    {
+        if (GetMoveStatus() != EPathFollowingStatus::Moving)
+        {
+            FindAndChasePlayer();
+        }
     }
 }
 
@@ -38,16 +62,20 @@ void AEnemyAIController::FindAndChasePlayer()
 {
     TargetPlayer = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
 
-    if (!TargetPlayer || !GetPawn())
+    if (TargetPlayer && GetPawn())
     {
-        UE_LOG(LogTemp, Warning,
-            TEXT("[EnemyAI] Player or enemy pawn not found."));
-        return;
+        MoveToActor(TargetPlayer, AttackRange * 0.75f);
     }
+}
 
-    UE_LOG(LogTemp, Warning,
-        TEXT("[EnemyAI] Chasing player: %s"),
-        *GetNameSafe(TargetPlayer));
+void AEnemyAIController::AttackPlayer()
+{
+    AMC* PlayerCharacter = Cast<AMC>(TargetPlayer);
 
-    MoveToActor(TargetPlayer, 100.0f);
+    if (PlayerCharacter)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Enemy attacks player!"));
+
+        PlayerCharacter->TakeCombatDamage(10.0f);
+    }
 }
