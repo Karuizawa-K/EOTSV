@@ -9,6 +9,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "InputCoreTypes.h"
 #include "Blueprint/UserWidget.h"
+#include "Engine/Engine.h"
 
 AMC::AMC()
 {
@@ -303,6 +304,16 @@ void AMC::InteractWithBantay()
     {
         SetCheckpoint(BestStatue);
         BestStatue->ActivateCheckpoint();
+
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(
+                -1,
+                3.0f,
+                FColor::Yellow,
+                TEXT("Bantay activated!")
+            );
+        }
 
         UE_LOG(
             LogTemp,
