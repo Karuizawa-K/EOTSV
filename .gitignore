@@ -1,0 +1,16 @@
+
+# Unreal Engine generated files
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Visual Studio generated files
+.vs/
+*.sln
+*.VC.db
+*.VC.VC.opendb
+
+# Operating system files
+.DS_Store
+Thumbs.db
