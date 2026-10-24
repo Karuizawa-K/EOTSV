@@ -62,6 +62,8 @@ void UCombatComponent::LightAttack()
         Start,
         End,
         FQuat::Identity,
+        // Use the visibility channel so the trace matches the default
+        // character capsule collision setup used by the enemy blueprints.
         ECC_Visibility,
         FCollisionShape::MakeSphere(AttackRadius),
         QueryParams

@@ -12,6 +12,7 @@ class ECHOESOFTHESUNKENVOW_API UStatsComponent : public UActorComponent
 
 public:
     UStatsComponent();
+    virtual void BeginPlay() override;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
         float MaxHealth = 100.0f;

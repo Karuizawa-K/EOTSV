@@ -6,6 +6,13 @@ UStatsComponent::UStatsComponent()
     PrimaryComponentTick.bCanEverTick = false;
 }
 
+void UStatsComponent::BeginPlay()
+{
+    Super::BeginPlay();
+    CurrentHealth = MaxHealth;
+    bIsDead = false;
+}
+
 void UStatsComponent::ApplyDamage(float DamageAmount)
 {
     if (bIsDead || DamageAmount <= 0.0f)

@@ -5,10 +5,14 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "BantayStatue.h"
+#include "Kismet/GameplayStatics.h"
+#include "InputCoreTypes.h"
+#include "Blueprint/UserWidget.h"
 
 AMC::AMC()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
 
     CombatComponent = CreateDefaultSubobject<UCombatComponent>(
         TEXT("CombatComponent")
@@ -26,6 +30,31 @@ AMC::AMC()
     // Configure the camera to follow controller rotation.
     bUseControllerRotationPitch = false;
     bUseControllerRotationRoll = false;
+
+    CurrentCheckpoint = nullptr;
+    BantayPromptWidget = nullptr;
+
+}
+
+void AMC::BeginPlay()
+{
+    Super::BeginPlay();
+
+    if (BantayPromptClass)
+    {
+        BantayPromptWidget = CreateWidget<UUserWidget>(
+            GetWorld(),
+            BantayPromptClass
+            );
+
+        if (BantayPromptWidget)
+        {
+            BantayPromptWidget->AddToViewport();
+            BantayPromptWidget->SetVisibility(
+                ESlateVisibility::Hidden
+            );
+        }
+    }
 }
 
 void AMC::SetupPlayerInputComponent(
@@ -64,6 +93,13 @@ void AMC::SetupPlayerInputComponent(
     // Combat
     PlayerInputComponent->BindAction(
         "Attack", IE_Pressed, this, &AMC::AttackPressed
+    );
+
+    PlayerInputComponent->BindAction(
+        "Interact",
+        IE_Pressed,
+        this,
+        &AMC::InteractWithBantay
     );
 }
 
@@ -114,6 +150,7 @@ void AMC::AttackPressed()
 }
 
 
+
 void AMC::TakeCombatDamage(float DamageAmount)
 {
     if (!StatsComponent || StatsComponent->bIsDead)
@@ -130,8 +167,7 @@ void AMC::TakeCombatDamage(float DamageAmount)
         // Stop player movement.
         GetCharacterMovement()->DisableMovement();
 
-        // Stop the player's controller movement commands.
-
+        // Stop player input.
         if (APlayerController* PlayerController =
             Cast<APlayerController>(GetController()))
         {
@@ -139,8 +175,214 @@ void AMC::TakeCombatDamage(float DamageAmount)
             DisableInput(PlayerController);
         }
 
-
         // Prevent further collisions.
         SetActorEnableCollision(false);
+
+        // Respawn at the last activated Bantay.
+        if (CurrentCheckpoint)
+        {
+            RespawnAtCheckpoint();
+        }
+        else
+        {
+            UE_LOG(
+                LogTemp,
+                Warning,
+                TEXT("No checkpoint activated. Player remains defeated.")
+            );
+        }
     }
+}
+
+
+
+void AMC::SetCheckpoint(ABantayStatue* NewCheckpoint)
+{
+    if (!NewCheckpoint)
+    {
+        return;
+    }
+
+    CurrentCheckpoint = NewCheckpoint;
+
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("Checkpoint set to: %s"),
+        *GetNameSafe(CurrentCheckpoint)
+    );
+}
+
+void AMC::RespawnAtCheckpoint()
+{
+    if (!CurrentCheckpoint)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("No Bantay checkpoint activated."));
+        return;
+    }
+
+    SetActorLocation(
+        CurrentCheckpoint->GetActorLocation() + FVector(0.0f, 0.0f, 100.0f)
+    );
+
+    SetActorRotation(CurrentCheckpoint->GetActorRotation());
+
+    if (StatsComponent)
+    {
+        StatsComponent->bIsDead = false;
+        StatsComponent->CurrentHealth = StatsComponent->MaxHealth;
+    }
+
+    SetActorEnableCollision(true);
+    GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+
+    if (APlayerController* PC = Cast<APlayerController>(GetController()))
+    {
+        EnableInput(PC);
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("Player respawned at Bantay."));
+}
+
+
+void AMC::InteractWithBantay()
+{
+    if (StatsComponent && StatsComponent->bIsDead)
+    {
+        return;
+    }
+
+    TArray<AActor*> FoundStatues;
+
+    UGameplayStatics::GetAllActorsOfClass(
+        GetWorld(),
+        ABantayStatue::StaticClass(),
+        FoundStatues
+    );
+
+    ABantayStatue* BestStatue = nullptr;
+    float BestDistance = TNumericLimits<float>::Max();
+
+    for (AActor* Actor : FoundStatues)
+    {
+        ABantayStatue* Statue = Cast<ABantayStatue>(Actor);
+
+        if (!Statue)
+        {
+            continue;
+        }
+
+        FVector ToStatue =
+            Statue->GetActorLocation() - GetActorLocation();
+
+        float Distance = ToStatue.Size();
+
+        if (Distance > Statue->InteractionDistance || Distance > BestDistance)
+        {
+            continue;
+        }
+
+        if (!ToStatue.Normalize())
+        {
+            continue;
+        }
+
+        float FacingDot = FVector::DotProduct(
+            GetActorForwardVector(),
+            ToStatue
+        );
+
+        if (FacingDot >= Statue->RequiredFacingDot)
+        {
+            BestStatue = Statue;
+            BestDistance = Distance;
+        }
+    }
+
+    if (BestStatue)
+    {
+        SetCheckpoint(BestStatue);
+        BestStatue->ActivateCheckpoint();
+
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Bantay activated!")
+            );
+    }
+    else
+    {
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("Move closer to the Bantay and face it.")
+        );
+    }
+}
+
+void AMC::UpdateBantayPrompt()
+{
+    if (!BantayPromptWidget || !GetWorld())
+    {
+        return;
+    }
+
+    bool bCanShowPrompt = false;
+
+    if (!StatsComponent || !StatsComponent->bIsDead)
+    {
+        TArray<AActor*> FoundStatues;
+
+        UGameplayStatics::GetAllActorsOfClass(
+            GetWorld(),
+            ABantayStatue::StaticClass(),
+            FoundStatues
+        );
+
+        for (AActor* Actor : FoundStatues)
+        {
+            ABantayStatue* Statue = Cast<ABantayStatue>(Actor);
+
+            if (!Statue)
+            {
+                continue;
+            }
+
+            FVector ToStatue =
+                Statue->GetActorLocation() - GetActorLocation();
+
+            const float Distance = ToStatue.Size();
+
+            if (Distance > Statue->InteractionDistance || Distance <= 0.0f)
+            {
+                continue;
+            }
+
+            ToStatue.Normalize();
+
+            const float FacingDot = FVector::DotProduct(
+                GetActorForwardVector(),
+                ToStatue
+            );
+
+            if (FacingDot >= Statue->RequiredFacingDot)
+            {
+                bCanShowPrompt = true;
+                break;
+            }
+        }
+    }
+
+    BantayPromptWidget->SetVisibility(
+        bCanShowPrompt
+        ? ESlateVisibility::Visible
+        : ESlateVisibility::Hidden
+    );
+}
+
+void AMC::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+
+    UpdateBantayPrompt();
 }

@@ -7,6 +7,8 @@
 class UInputComponent;
 class UCombatComponent;
 class UStatsComponent;
+class ABantayStatue;
+class UUserWidget;
 
 UCLASS()
 class ECHOESOFTHESUNKENVOW_API AMC : public ACharacter
@@ -15,6 +17,12 @@ class ECHOESOFTHESUNKENVOW_API AMC : public ACharacter
 
 public:
     AMC();
+
+    UFUNCTION()
+        void UpdateBantayPrompt();
+
+    virtual void Tick(float DeltaTime) override;
+
 
 protected:
     virtual void SetupPlayerInputComponent(
@@ -26,10 +34,30 @@ protected:
     void LookUp(float Value);
 
     void AttackPressed();
+    virtual void BeginPlay() override;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Checkpoint")
+        ABantayStatue* CurrentCheckpoint;
+
+    UFUNCTION(BlueprintCallable, Category = "Checkpoint")
+        void SetCheckpoint(ABantayStatue* NewCheckpoint);
+
+    UFUNCTION(BlueprintCallable, Category = "Checkpoint")
+        void RespawnAtCheckpoint();
+
+    UFUNCTION()
+        void InteractWithBantay();
+
+    UPROPERTY(EditDefaultsOnly, Category = "Bantay UI")
+        TSubclassOf<UUserWidget> BantayPromptClass;
+
+    UPROPERTY()
+        UUserWidget* BantayPromptWidget;
 
 public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
     UCombatComponent* CombatComponent;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
     UStatsComponent* StatsComponent;
 
     UFUNCTION(BlueprintCallable, Category = "Combat")

@@ -2,6 +2,7 @@
 #include "EnemyAIController.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Pawn.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "MC.h"
 
 AEnemyAIController::AEnemyAIController()
