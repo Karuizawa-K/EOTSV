@@ -87,6 +87,7 @@ protected:
     UPROPERTY()
         UUserWidget* NPCPromptWidget;
 
+
     UPROPERTY(EditDefaultsOnly, Category = "Game Over")
         TSubclassOf<UUserWidget> GameOverWidgetClass;
 

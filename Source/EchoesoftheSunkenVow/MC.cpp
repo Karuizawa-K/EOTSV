@@ -377,6 +377,7 @@ void AMC::RetryAfterDeath()
         ActiveStoryNPC->EndDialogue(false);
     }
 
+
     if (GameOverWidgetInstance)
     {
         GameOverWidgetInstance->RemoveFromParent();
@@ -410,6 +411,7 @@ void AMC::ReturnToMainMenu()
     {
         ActiveStoryNPC->EndDialogue(false);
     }
+
 
     if (GameOverWidgetInstance)
     {
