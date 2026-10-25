@@ -125,6 +125,12 @@ void AEnemyAIController::UpdateRangedEnemy(ABaseEnemy* Enemy, float DeltaSeconds
 {
     RangedCooldownRemaining = FMath::Max(0.0f, RangedCooldownRemaining - DeltaSeconds);
 
+    // Recover an existing component if Hot Reload cleared the cached reference.
+    if (!Enemy->StatsComponent)
+    {
+        Enemy->StatsComponent = Enemy->FindComponentByClass<UStatsComponent>();
+    }
+
     if (!Enemy->StatsComponent || Enemy->StatsComponent->bIsDead)
     {
         CancelRangedAttack();

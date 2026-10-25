@@ -10,6 +10,7 @@
 #include "InputCoreTypes.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/Engine.h"
+#include "Engine/World.h"
 
 AMC::AMC()
 {
@@ -39,7 +40,18 @@ AMC::AMC()
 
 void AMC::BeginPlay()
 {
+    // Hot Reload can clear the cached property while leaving the owned component intact.
+    if (!StatsComponent)
+    {
+        StatsComponent = FindComponentByClass<UStatsComponent>();
+    }
+
     Super::BeginPlay();
+
+    if (!StatsComponent)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[Stats] Player has no StatsComponent; health and stamina cannot update."));
+    }
 
     if (BantayPromptClass)
     {
@@ -91,6 +103,10 @@ void AMC::SetupPlayerInputComponent(
         "Jump", IE_Released, this, &ACharacter::StopJumping
     );
 
+    PlayerInputComponent->BindAction(
+        "Dodge", IE_Pressed, this, &AMC::DodgePressed
+    );
+
     // Combat
     PlayerInputComponent->BindAction(
         "Attack", IE_Pressed, this, &AMC::AttackPressed
@@ -106,7 +122,7 @@ void AMC::SetupPlayerInputComponent(
 
 void AMC::MoveForward(float Value)
 {
-    if (Controller && Value != 0.0f)
+    if (!bIsDodging && Controller && Value != 0.0f)
     {
         const FRotator Rotation = Controller->GetControlRotation();
         const FRotator YawRotation(0.0f, Rotation.Yaw, 0.0f);
@@ -120,7 +136,7 @@ void AMC::MoveForward(float Value)
 
 void AMC::MoveRight(float Value)
 {
-    if (Controller && Value != 0.0f)
+    if (!bIsDodging && Controller && Value != 0.0f)
     {
         const FRotator Rotation = Controller->GetControlRotation();
         const FRotator YawRotation(0.0f, Rotation.Yaw, 0.0f);
@@ -150,6 +166,85 @@ void AMC::AttackPressed()
     }
 }
 
+void AMC::DodgePressed()
+{
+    UCharacterMovementComponent* Movement = GetCharacterMovement();
+    if (bIsDodging || !Controller || !InputComponent || !GetWorld() || !StatsComponent
+        || !Movement || !Movement->IsMovingOnGround() || Controller->IsMoveInputIgnored()
+        || GetWorld()->GetTimeSeconds() < NextDodgeTime)
+    {
+        return;
+    }
+
+    const FRotator CameraYaw(0.0f, Controller->GetControlRotation().Yaw, 0.0f);
+    const FVector Forward = CameraYaw.Vector();
+    const FVector Right = FRotationMatrix(CameraYaw).GetUnitAxis(EAxis::Y);
+    FVector Direction = Forward * InputComponent->GetAxisValue(TEXT("MoveForward"))
+        + Right * InputComponent->GetAxisValue(TEXT("MoveRight"));
+    if (!Direction.Normalize())
+    {
+        Direction = -Forward;
+    }
+
+    if (!StatsComponent->TrySpendStamina(20.0f))
+    {
+        return;
+    }
+
+    bIsDodging = true;
+    DodgeDirection = Direction;
+    DodgeStartTime = GetWorld()->GetTimeSeconds();
+    NextDodgeTime = DodgeStartTime + 0.9f;
+    SavedMaxWalkSpeed = Movement->MaxWalkSpeed;
+    Movement->MaxWalkSpeed = FMath::Max(1.0f, DodgeSpeed);
+
+    // Replace old horizontal momentum; CharacterMovement still handles collision and gravity.
+    Movement->Velocity.X = DodgeDirection.X * Movement->MaxWalkSpeed;
+    Movement->Velocity.Y = DodgeDirection.Y * Movement->MaxWalkSpeed;
+    ConsumeMovementInputVector();
+
+    if (CombatComponent)
+    {
+        CombatComponent->ClearBufferedAttack();
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("[Dodge] Started | Direction: %s"), *DodgeDirection.ToString());
+}
+
+void AMC::EndDodge(bool bResetCooldown)
+{
+    if (bResetCooldown)
+    {
+        NextDodgeTime = 0.0f;
+    }
+
+    if (!bIsDodging)
+    {
+        return;
+    }
+
+    bIsDodging = false;
+    DodgeStartTime = -1.0f;
+    DodgeDirection = FVector::ZeroVector;
+    ConsumeMovementInputVector();
+
+    if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+    {
+        Movement->MaxWalkSpeed = SavedMaxWalkSpeed;
+        // Keep vertical velocity so jumping or falling still works normally.
+        Movement->Velocity.X = 0.0f;
+        Movement->Velocity.Y = 0.0f;
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("[Dodge] Ended."));
+}
+
+void AMC::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    EndDodge(true);
+    Super::EndPlay(EndPlayReason);
+}
+
 
 
 void AMC::TakeCombatDamage(float DamageAmount)
@@ -159,11 +254,25 @@ void AMC::TakeCombatDamage(float DamageAmount)
         return;
     }
 
+    if (bIsDodging && GetWorld() && GetWorld()->GetTimeSeconds() - DodgeStartTime < 0.3f)
+    {
+        UE_LOG(LogTemp, Log, TEXT("[Dodge] Damage avoided."));
+        return;
+    }
+
     StatsComponent->ApplyDamage(DamageAmount);
 
     if (StatsComponent->bIsDead)
     {
         UE_LOG(LogTemp, Warning, TEXT("Player defeated!"));
+
+        EndDodge(true);
+
+        // Discard queued swings before a checkpoint can immediately revive the player.
+        if (CombatComponent)
+        {
+            CombatComponent->CancelAttacks();
+        }
 
         // Stop player movement.
         GetCharacterMovement()->DisableMovement();
@@ -222,6 +331,8 @@ void AMC::RespawnAtCheckpoint()
         return;
     }
 
+    EndDodge(true);
+
     SetActorLocation(
         CurrentCheckpoint->GetActorLocation() + FVector(0.0f, 0.0f, 100.0f)
     );
@@ -232,6 +343,7 @@ void AMC::RespawnAtCheckpoint()
     {
         StatsComponent->bIsDead = false;
         StatsComponent->CurrentHealth = StatsComponent->MaxHealth;
+        StatsComponent->RestoreStamina();
     }
 
     SetActorEnableCollision(true);
@@ -304,6 +416,16 @@ void AMC::InteractWithBantay()
     {
         SetCheckpoint(BestStatue);
         BestStatue->ActivateCheckpoint();
+
+        if (StatsComponent)
+        {
+            StatsComponent->CurrentHealth = StatsComponent->MaxHealth;
+            StatsComponent->RestoreStamina();
+
+            UE_LOG(LogTemp, Log, TEXT("[Bantay] Restored HP: %.1f / %.1f | Stamina: %.1f / %.1f"),
+                StatsComponent->CurrentHealth, StatsComponent->MaxHealth,
+                StatsComponent->CurrentStamina, StatsComponent->MaxStamina);
+        }
 
         if (GEngine)
         {
@@ -394,6 +516,31 @@ void AMC::UpdateBantayPrompt()
 void AMC::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+
+    if (bIsDodging)
+    {
+        UCharacterMovementComponent* Movement = GetCharacterMovement();
+        if (!StatsComponent || StatsComponent->bIsDead || StatsComponent->CurrentHealth <= 0.0f)
+        {
+            EndDodge(true);
+        }
+        else if (GetWorld()->GetTimeSeconds() >= NextDodgeTime
+            || !Movement || !Movement->IsMovingOnGround())
+        {
+            // Leaving the ground ends movement/invulnerability, but retains the cooldown.
+            EndDodge();
+        }
+        else
+        {
+            ConsumeMovementInputVector();
+            AddMovementInput(DodgeDirection, 1.0f);
+        }
+    }
+
+    if (StatsComponent)
+    {
+        StatsComponent->RegenerateStamina(DeltaTime);
+    }
 
     UpdateBantayPrompt();
 }

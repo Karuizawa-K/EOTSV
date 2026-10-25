@@ -23,6 +23,8 @@ public:
 
     virtual void Tick(float DeltaTime) override;
 
+    bool IsDodging() const { return bIsDodging; }
+
 
 protected:
     virtual void SetupPlayerInputComponent(
@@ -35,6 +37,13 @@ protected:
 
     void AttackPressed();
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+    void DodgePressed();
+    void EndDodge(bool bResetCooldown = false);
+
+    UPROPERTY(EditDefaultsOnly, Category = "Movement|Dodge", meta = (ClampMin = "1.0"))
+        float DodgeSpeed = 800.0f;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Checkpoint")
         ABantayStatue* CurrentCheckpoint;
@@ -62,4 +71,11 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "Combat")
         void TakeCombatDamage(float DamageAmount);
+
+private:
+    bool bIsDodging = false;
+    FVector DodgeDirection = FVector::ZeroVector;
+    float DodgeStartTime = -1.0f;
+    float NextDodgeTime = 0.0f;
+    float SavedMaxWalkSpeed = 0.0f;
 };
