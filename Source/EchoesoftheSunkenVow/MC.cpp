@@ -35,6 +35,7 @@ AMC::AMC()
 
     CurrentCheckpoint = nullptr;
     BantayPromptWidget = nullptr;
+    GameOverWidgetInstance = nullptr;
 
 }
 
@@ -283,25 +284,82 @@ void AMC::TakeCombatDamage(float DamageAmount)
         {
             PlayerController->StopMovement();
             DisableInput(PlayerController);
+
+            FInputModeUIOnly InputMode;
+            if (GameOverWidgetInstance)
+            {
+                InputMode.SetWidgetToFocus(GameOverWidgetInstance->TakeWidget());
+            }
+            PlayerController->SetInputMode(InputMode);
+            PlayerController->bShowMouseCursor = true;
         }
 
         // Prevent further collisions.
         SetActorEnableCollision(false);
 
-        // Respawn at the last activated Bantay.
-        if (CurrentCheckpoint)
+        // Show the Game Over screen once for this death.
+        if (!GameOverWidgetInstance && GameOverWidgetClass)
         {
-            RespawnAtCheckpoint();
-        }
-        else
-        {
-            UE_LOG(
-                LogTemp,
-                Warning,
-                TEXT("No checkpoint activated. Player remains defeated.")
+            GameOverWidgetInstance = CreateWidget<UUserWidget>(
+                GetWorld(),
+                GameOverWidgetClass
             );
+
+            if (GameOverWidgetInstance)
+            {
+                GameOverWidgetInstance->AddToViewport();
+
+                if (APlayerController* PlayerController =
+                    Cast<APlayerController>(GetController()))
+                {
+                    FInputModeUIOnly InputMode;
+                    InputMode.SetWidgetToFocus(GameOverWidgetInstance->TakeWidget());
+                    PlayerController->SetInputMode(InputMode);
+                    PlayerController->bShowMouseCursor = true;
+                }
+            }
         }
     }
+}
+
+void AMC::RetryAfterDeath()
+{
+    if (GameOverWidgetInstance)
+    {
+        GameOverWidgetInstance->RemoveFromParent();
+        GameOverWidgetInstance = nullptr;
+    }
+
+    APlayerController* PlayerController = Cast<APlayerController>(GetController());
+    if (PlayerController)
+    {
+        FInputModeGameOnly InputMode;
+        PlayerController->SetInputMode(InputMode);
+        PlayerController->bShowMouseCursor = false;
+        EnableInput(PlayerController);
+    }
+
+    if (IsValid(CurrentCheckpoint))
+    {
+        RespawnAtCheckpoint();
+        return;
+    }
+
+    if (GetWorld())
+    {
+        UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
+    }
+}
+
+void AMC::ReturnToMainMenu()
+{
+    if (GameOverWidgetInstance)
+    {
+        GameOverWidgetInstance->RemoveFromParent();
+        GameOverWidgetInstance = nullptr;
+    }
+
+    UGameplayStatics::OpenLevel(this, FName(TEXT("L_MainMenu")));
 }
 
 

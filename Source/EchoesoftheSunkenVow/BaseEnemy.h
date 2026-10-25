@@ -6,6 +6,8 @@
 
 class UStatsComponent;
 class UTextRenderComponent;
+class UWidgetComponent;
+class UEnemyHealthBarWidget;
 class AEnemyProjectile;
 
 UCLASS()
@@ -18,6 +20,12 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
     UStatsComponent* StatsComponent;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UI")
+    UWidgetComponent* EnemyHealthWidgetComponent;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI")
+    TSubclassOf<UEnemyHealthBarWidget> EnemyHealthBarWidgetClass;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Ranged")
     bool bIsRangedEnemy = false;
@@ -45,4 +53,10 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "Combat")
     void TakeCombatDamage(float DamageAmount);
+
+protected:
+    virtual void BeginPlay() override;
+
+private:
+    void UpdateEnemyHealthBar();
 };

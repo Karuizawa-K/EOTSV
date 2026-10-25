@@ -18,6 +18,12 @@ class ECHOESOFTHESUNKENVOW_API AMC : public ACharacter
 public:
     AMC();
 
+    UFUNCTION(BlueprintCallable, Category = "Game Over")
+        void RetryAfterDeath();
+
+    UFUNCTION(BlueprintCallable, Category = "Game Over")
+        void ReturnToMainMenu();
+
     UFUNCTION()
         void UpdateBantayPrompt();
 
@@ -62,6 +68,12 @@ protected:
 
     UPROPERTY()
         UUserWidget* BantayPromptWidget;
+
+    UPROPERTY(EditDefaultsOnly, Category = "Game Over")
+        TSubclassOf<UUserWidget> GameOverWidgetClass;
+
+    UPROPERTY()
+        UUserWidget* GameOverWidgetInstance;
 
 public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
