@@ -8,6 +8,7 @@ class UInputComponent;
 class UCombatComponent;
 class UStatsComponent;
 class ABantayStatue;
+class AStoryNPC;
 class UUserWidget;
 
 UCLASS()
@@ -27,9 +28,15 @@ public:
     UFUNCTION()
         void UpdateBantayPrompt();
 
+    void UpdateNPCPrompt();
+
     virtual void Tick(float DeltaTime) override;
 
     bool IsDodging() const { return bIsDodging; }
+
+    bool BeginStoryDialogue(AStoryNPC* NPC);
+    void EndStoryDialogue(AStoryNPC* NPC);
+    bool IsDialogueActive() const { return bIsDialogueActive; }
 
 
 protected:
@@ -41,7 +48,10 @@ protected:
     void Turn(float Value);
     void LookUp(float Value);
 
+    void JumpPressed();
+    void JumpReleased();
     void AttackPressed();
+    void InteractPressed();
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
@@ -63,11 +73,19 @@ protected:
     UFUNCTION()
         void InteractWithBantay();
 
+    AStoryNPC* FindBestStoryNPC() const;
+
     UPROPERTY(EditDefaultsOnly, Category = "Bantay UI")
         TSubclassOf<UUserWidget> BantayPromptClass;
 
     UPROPERTY()
         UUserWidget* BantayPromptWidget;
+
+    UPROPERTY(EditDefaultsOnly, Category = "NPC UI")
+        TSubclassOf<UUserWidget> NPCPromptClass;
+
+    UPROPERTY()
+        UUserWidget* NPCPromptWidget;
 
     UPROPERTY(EditDefaultsOnly, Category = "Game Over")
         TSubclassOf<UUserWidget> GameOverWidgetClass;
@@ -90,4 +108,10 @@ private:
     float DodgeStartTime = -1.0f;
     float NextDodgeTime = 0.0f;
     float SavedMaxWalkSpeed = 0.0f;
+
+    UPROPERTY()
+        AStoryNPC* ActiveStoryNPC = nullptr;
+
+    bool bIsDialogueActive = false;
+    bool bMoveInputWasIgnoredBeforeDialogue = false;
 };

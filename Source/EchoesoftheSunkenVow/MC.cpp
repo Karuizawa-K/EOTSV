@@ -6,6 +6,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "BantayStatue.h"
+#include "StoryNPC.h"
 #include "Kismet/GameplayStatics.h"
 #include "InputCoreTypes.h"
 #include "Blueprint/UserWidget.h"
@@ -35,6 +36,7 @@ AMC::AMC()
 
     CurrentCheckpoint = nullptr;
     BantayPromptWidget = nullptr;
+    NPCPromptWidget = nullptr;
     GameOverWidgetInstance = nullptr;
 
 }
@@ -69,6 +71,20 @@ void AMC::BeginPlay()
             );
         }
     }
+
+    if (NPCPromptClass)
+    {
+        NPCPromptWidget = CreateWidget<UUserWidget>(
+            GetWorld(),
+            NPCPromptClass
+        );
+
+        if (NPCPromptWidget)
+        {
+            NPCPromptWidget->AddToViewport();
+            NPCPromptWidget->SetVisibility(ESlateVisibility::Hidden);
+        }
+    }
 }
 
 void AMC::SetupPlayerInputComponent(
@@ -97,11 +113,11 @@ void AMC::SetupPlayerInputComponent(
 
     // Jump
     PlayerInputComponent->BindAction(
-        "Jump", IE_Pressed, this, &ACharacter::Jump
+        "Jump", IE_Pressed, this, &AMC::JumpPressed
     );
 
     PlayerInputComponent->BindAction(
-        "Jump", IE_Released, this, &ACharacter::StopJumping
+        "Jump", IE_Released, this, &AMC::JumpReleased
     );
 
     PlayerInputComponent->BindAction(
@@ -117,13 +133,13 @@ void AMC::SetupPlayerInputComponent(
         "Interact",
         IE_Pressed,
         this,
-        &AMC::InteractWithBantay
+        &AMC::InteractPressed
     );
 }
 
 void AMC::MoveForward(float Value)
 {
-    if (!bIsDodging && Controller && Value != 0.0f)
+    if (!bIsDodging && !bIsDialogueActive && Controller && Value != 0.0f)
     {
         const FRotator Rotation = Controller->GetControlRotation();
         const FRotator YawRotation(0.0f, Rotation.Yaw, 0.0f);
@@ -137,7 +153,7 @@ void AMC::MoveForward(float Value)
 
 void AMC::MoveRight(float Value)
 {
-    if (!bIsDodging && Controller && Value != 0.0f)
+    if (!bIsDodging && !bIsDialogueActive && Controller && Value != 0.0f)
     {
         const FRotator Rotation = Controller->GetControlRotation();
         const FRotator YawRotation(0.0f, Rotation.Yaw, 0.0f);
@@ -159,9 +175,25 @@ void AMC::LookUp(float Value)
     AddControllerPitchInput(Value * 0.3f);
 }
 
+void AMC::JumpPressed()
+{
+    if (!bIsDialogueActive)
+    {
+        Jump();
+    }
+}
+
+void AMC::JumpReleased()
+{
+    if (!bIsDialogueActive)
+    {
+        StopJumping();
+    }
+}
+
 void AMC::AttackPressed()
 {
-    if (CombatComponent)
+    if (!bIsDialogueActive && CombatComponent)
     {
         CombatComponent->LightAttack();
     }
@@ -169,6 +201,11 @@ void AMC::AttackPressed()
 
 void AMC::DodgePressed()
 {
+    if (bIsDialogueActive)
+    {
+        return;
+    }
+
     UCharacterMovementComponent* Movement = GetCharacterMovement();
     if (bIsDodging || !Controller || !InputComponent || !GetWorld() || !StatsComponent
         || !Movement || !Movement->IsMovingOnGround() || Controller->IsMoveInputIgnored()
@@ -242,6 +279,12 @@ void AMC::EndDodge(bool bResetCooldown)
 
 void AMC::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    if (NPCPromptWidget)
+    {
+        NPCPromptWidget->RemoveFromParent();
+        NPCPromptWidget = nullptr;
+    }
+
     EndDodge(true);
     Super::EndPlay(EndPlayReason);
 }
@@ -266,6 +309,11 @@ void AMC::TakeCombatDamage(float DamageAmount)
     if (StatsComponent->bIsDead)
     {
         UE_LOG(LogTemp, Warning, TEXT("Player defeated!"));
+
+        if (bIsDialogueActive && ActiveStoryNPC)
+        {
+            ActiveStoryNPC->EndDialogue(false);
+        }
 
         EndDodge(true);
 
@@ -324,6 +372,11 @@ void AMC::TakeCombatDamage(float DamageAmount)
 
 void AMC::RetryAfterDeath()
 {
+    if (bIsDialogueActive && ActiveStoryNPC)
+    {
+        ActiveStoryNPC->EndDialogue(false);
+    }
+
     if (GameOverWidgetInstance)
     {
         GameOverWidgetInstance->RemoveFromParent();
@@ -353,6 +406,11 @@ void AMC::RetryAfterDeath()
 
 void AMC::ReturnToMainMenu()
 {
+    if (bIsDialogueActive && ActiveStoryNPC)
+    {
+        ActiveStoryNPC->EndDialogue(false);
+    }
+
     if (GameOverWidgetInstance)
     {
         GameOverWidgetInstance->RemoveFromParent();
@@ -513,6 +571,116 @@ void AMC::InteractWithBantay()
     }
 }
 
+void AMC::InteractPressed()
+{
+    if (bIsDialogueActive)
+    {
+        if (ActiveStoryNPC)
+        {
+            ActiveStoryNPC->AdvanceDialogue();
+        }
+
+        return;
+    }
+
+    if (StatsComponent && StatsComponent->bIsDead)
+    {
+        return;
+    }
+
+    if (AStoryNPC* NPC = FindBestStoryNPC())
+    {
+        NPC->Interact(this);
+        return;
+    }
+
+    InteractWithBantay();
+}
+
+AStoryNPC* AMC::FindBestStoryNPC() const
+{
+    if (!GetWorld())
+    {
+        return nullptr;
+    }
+
+    TArray<AActor*> FoundNPCs;
+    UGameplayStatics::GetAllActorsOfClass(
+        GetWorld(),
+        AStoryNPC::StaticClass(),
+        FoundNPCs
+    );
+
+    AStoryNPC* BestNPC = nullptr;
+    float BestDistance = TNumericLimits<float>::Max();
+
+    for (AActor* Actor : FoundNPCs)
+    {
+        AStoryNPC* NPC = Cast<AStoryNPC>(Actor);
+        if (!NPC || !NPC->CanInteractWithPlayer(this))
+        {
+            continue;
+        }
+
+        const float Distance = FVector::Dist(GetActorLocation(), NPC->GetActorLocation());
+        if (Distance < BestDistance)
+        {
+            BestNPC = NPC;
+            BestDistance = Distance;
+        }
+    }
+
+    return BestNPC;
+}
+
+bool AMC::BeginStoryDialogue(AStoryNPC* NPC)
+{
+    if (!NPC || bIsDialogueActive || (StatsComponent && StatsComponent->bIsDead))
+    {
+        return false;
+    }
+
+    EndDodge(true);
+
+    if (CombatComponent)
+    {
+        CombatComponent->CancelAttacks();
+    }
+
+    if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+    {
+        Movement->StopMovementImmediately();
+    }
+
+    if (Controller)
+    {
+        bMoveInputWasIgnoredBeforeDialogue = Controller->IsMoveInputIgnored();
+        Controller->SetIgnoreMoveInput(true);
+    }
+
+    ActiveStoryNPC = NPC;
+    bIsDialogueActive = true;
+    return true;
+}
+
+void AMC::EndStoryDialogue(AStoryNPC* NPC)
+{
+    if (!bIsDialogueActive || (NPC && ActiveStoryNPC != NPC))
+    {
+        return;
+    }
+
+    if (Controller)
+    {
+        Controller->SetIgnoreMoveInput(bMoveInputWasIgnoredBeforeDialogue);
+    }
+
+    ConsumeMovementInputVector();
+    ActiveStoryNPC = nullptr;
+    bIsDialogueActive = false;
+    bMoveInputWasIgnoredBeforeDialogue = false;
+}
+
 void AMC::UpdateBantayPrompt()
 {
     if (!BantayPromptWidget || !GetWorld())
@@ -522,7 +690,15 @@ void AMC::UpdateBantayPrompt()
 
     bool bCanShowPrompt = false;
 
-    if (!StatsComponent || !StatsComponent->bIsDead)
+    if (!bIsDialogueActive
+        && (!StatsComponent || !StatsComponent->bIsDead)
+        && FindBestStoryNPC())
+    {
+        BantayPromptWidget->SetVisibility(ESlateVisibility::Hidden);
+        return;
+    }
+
+    if (!bIsDialogueActive && (!StatsComponent || !StatsComponent->bIsDead))
     {
         TArray<AActor*> FoundStatues;
 
@@ -573,6 +749,24 @@ void AMC::UpdateBantayPrompt()
     );
 }
 
+void AMC::UpdateNPCPrompt()
+{
+    if (!NPCPromptWidget || !GetWorld())
+    {
+        return;
+    }
+
+    const bool bCanShowPrompt = !bIsDialogueActive
+        && (!StatsComponent || !StatsComponent->bIsDead)
+        && FindBestStoryNPC() != nullptr;
+
+    NPCPromptWidget->SetVisibility(
+        bCanShowPrompt
+        ? ESlateVisibility::Visible
+        : ESlateVisibility::Hidden
+    );
+}
+
 void AMC::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
@@ -602,5 +796,6 @@ void AMC::Tick(float DeltaTime)
         StatsComponent->RegenerateStamina(DeltaTime);
     }
 
+    UpdateNPCPrompt();
     UpdateBantayPrompt();
 }
