@@ -33,6 +33,12 @@ ABaseEnemy::ABaseEnemy()
 
 void ABaseEnemy::TakeCombatDamage(float DamageAmount)
 {
+    // Live Coding can clear the cached reference while the component object remains.
+    if (!StatsComponent)
+    {
+        StatsComponent = FindComponentByClass<UStatsComponent>();
+    }
+
     if (!StatsComponent || StatsComponent->bIsDead)
     {
         return;
