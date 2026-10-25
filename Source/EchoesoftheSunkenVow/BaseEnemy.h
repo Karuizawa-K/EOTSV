@@ -30,8 +30,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Ranged")
     bool bIsRangedEnemy = false;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Melee", meta = (ClampMin = "0.0"))
+    float MeleeDetectionRange = 1000.0f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Ranged", meta = (ClampMin = "0.0", EditCondition = "bIsRangedEnemy"))
-    float RangedDetectionRange = 1500.0f;
+    float RangedDetectionRange = 1200.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat|Ranged", meta = (ClampMin = "1.0", EditCondition = "bIsRangedEnemy"))
     float RangedAttackRange = 800.0f;

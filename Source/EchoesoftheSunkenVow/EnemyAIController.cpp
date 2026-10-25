@@ -49,6 +49,16 @@ void AEnemyAIController::Tick(float DeltaSeconds)
         return;
     }
 
+    const float DetectionRange = FMath::Max(0.0f, Enemy->MeleeDetectionRange);
+    if (FVector::DistSquared(
+            GetPawn()->GetActorLocation(),
+            TargetPlayer->GetActorLocation()) > FMath::Square(DetectionRange))
+    {
+        // Do not keep chasing a player who has left the melee detection range.
+        FindAndChasePlayer();
+        return;
+    }
+
     const float Distance = FVector::Dist(
         GetPawn()->GetActorLocation(),
         TargetPlayer->GetActorLocation()
@@ -88,8 +98,20 @@ void AEnemyAIController::FindAndChasePlayer()
 
     if (TargetPlayer && GetPawn())
     {
-        MoveToActor(TargetPlayer, AttackRange * 0.75f);
+        const float DetectionRange = FMath::Max(0.0f, Enemy->MeleeDetectionRange);
+        const bool bWithinDetectionRange = FVector::DistSquared(
+            GetPawn()->GetActorLocation(),
+            TargetPlayer->GetActorLocation()) <= FMath::Square(DetectionRange);
+
+        if (bWithinDetectionRange)
+        {
+            MoveToActor(TargetPlayer, AttackRange * 0.75f);
+            return;
+        }
     }
+
+    TargetPlayer = nullptr;
+    StopMovement();
 }
 
 void AEnemyAIController::AttackPlayer()
