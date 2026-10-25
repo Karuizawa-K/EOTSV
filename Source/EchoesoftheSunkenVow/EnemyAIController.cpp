@@ -18,8 +18,10 @@ AEnemyAIController::AEnemyAIController()
 
     TargetPlayer = nullptr;
 
-    AttackCooldown = 1.5f;
-    AttackTimer = 0.0f;
+    AttackCooldown = 2.0f;
+    AttackTimer = 0.8f;
+    // Must be larger than two capsules touching (~68-84 between centers),
+    // otherwise the melee attack check can never pass.
     AttackRange = 200.0f;
 }
 

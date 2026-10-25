@@ -35,6 +35,7 @@ AMC::AMC()
 
     CurrentCheckpoint = nullptr;
     BantayPromptWidget = nullptr;
+    GameOverWidgetInstance = nullptr;
 
 }
 
@@ -183,7 +184,7 @@ void AMC::DodgePressed()
         + Right * InputComponent->GetAxisValue(TEXT("MoveRight"));
     if (!Direction.Normalize())
     {
-        Direction = -Forward;
+        Direction = Forward;
     }
 
     if (!StatsComponent->TrySpendStamina(20.0f))
@@ -196,7 +197,7 @@ void AMC::DodgePressed()
     DodgeStartTime = GetWorld()->GetTimeSeconds();
     NextDodgeTime = DodgeStartTime + 0.9f;
     SavedMaxWalkSpeed = Movement->MaxWalkSpeed;
-    Movement->MaxWalkSpeed = FMath::Max(1.0f, DodgeSpeed);
+    Movement->MaxWalkSpeed = FMath::Max(2.0f, DodgeSpeed);
 
     // Replace old horizontal momentum; CharacterMovement still handles collision and gravity.
     Movement->Velocity.X = DodgeDirection.X * Movement->MaxWalkSpeed;
@@ -283,25 +284,82 @@ void AMC::TakeCombatDamage(float DamageAmount)
         {
             PlayerController->StopMovement();
             DisableInput(PlayerController);
+
+            FInputModeUIOnly InputMode;
+            if (GameOverWidgetInstance)
+            {
+                InputMode.SetWidgetToFocus(GameOverWidgetInstance->TakeWidget());
+            }
+            PlayerController->SetInputMode(InputMode);
+            PlayerController->bShowMouseCursor = true;
         }
 
         // Prevent further collisions.
         SetActorEnableCollision(false);
 
-        // Respawn at the last activated Bantay.
-        if (CurrentCheckpoint)
+        // Show the Game Over screen once for this death.
+        if (!GameOverWidgetInstance && GameOverWidgetClass)
         {
-            RespawnAtCheckpoint();
-        }
-        else
-        {
-            UE_LOG(
-                LogTemp,
-                Warning,
-                TEXT("No checkpoint activated. Player remains defeated.")
+            GameOverWidgetInstance = CreateWidget<UUserWidget>(
+                GetWorld(),
+                GameOverWidgetClass
             );
+
+            if (GameOverWidgetInstance)
+            {
+                GameOverWidgetInstance->AddToViewport();
+
+                if (APlayerController* PlayerController =
+                    Cast<APlayerController>(GetController()))
+                {
+                    FInputModeUIOnly InputMode;
+                    InputMode.SetWidgetToFocus(GameOverWidgetInstance->TakeWidget());
+                    PlayerController->SetInputMode(InputMode);
+                    PlayerController->bShowMouseCursor = true;
+                }
+            }
         }
     }
+}
+
+void AMC::RetryAfterDeath()
+{
+    if (GameOverWidgetInstance)
+    {
+        GameOverWidgetInstance->RemoveFromParent();
+        GameOverWidgetInstance = nullptr;
+    }
+
+    APlayerController* PlayerController = Cast<APlayerController>(GetController());
+    if (PlayerController)
+    {
+        FInputModeGameOnly InputMode;
+        PlayerController->SetInputMode(InputMode);
+        PlayerController->bShowMouseCursor = false;
+        EnableInput(PlayerController);
+    }
+
+    if (IsValid(CurrentCheckpoint))
+    {
+        RespawnAtCheckpoint();
+        return;
+    }
+
+    if (GetWorld())
+    {
+        UGameplayStatics::OpenLevel(this, FName(*GetWorld()->GetName()));
+    }
+}
+
+void AMC::ReturnToMainMenu()
+{
+    if (GameOverWidgetInstance)
+    {
+        GameOverWidgetInstance->RemoveFromParent();
+        GameOverWidgetInstance = nullptr;
+    }
+
+    UGameplayStatics::OpenLevel(this, FName(TEXT("L_MainMenu")));
 }
 
 
@@ -334,7 +392,9 @@ void AMC::RespawnAtCheckpoint()
     EndDodge(true);
 
     SetActorLocation(
-        CurrentCheckpoint->GetActorLocation() + FVector(0.0f, 0.0f, 100.0f)
+        CurrentCheckpoint->GetActorLocation()
+        + CurrentCheckpoint->GetActorForwardVector() * -200.0f
+        + FVector(0.0f, 0.0f, 60.0f)
     );
 
     SetActorRotation(CurrentCheckpoint->GetActorRotation());
