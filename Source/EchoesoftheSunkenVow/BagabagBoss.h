@@ -5,6 +5,7 @@
 #include "BagabagBoss.generated.h"
 
 class UAnimMontage;
+class UMatineeCameraShake;
 
 UENUM(BlueprintType)
 enum class EBagabagBossState : uint8
@@ -70,6 +71,24 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boss|Charge", meta = (ClampMin = "0.0"))
     float MaxChargeDistance;
 
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Boss|Charge|Impact", meta = (ClampMin = "0.0"))
+    float ChargeImpactDamage = 30.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Boss|Charge|Impact", meta = (ClampMin = "0.0", Units = "cm"))
+    float ChargeImpactRadius = 300.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Boss|Charge|Impact")
+    bool bChargeImpactRequiresLineOfSight = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Boss|Charge|Camera Shake")
+    TSubclassOf<UMatineeCameraShake> GroundImpactShakeClass;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Boss|Charge|Camera Shake", meta = (ClampMin = "0.0", Units = "cm"))
+    float GroundShakeRadius = 1000.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Boss|Charge|Camera Shake", meta = (ClampMin = "0.0"))
+    float GroundShakeMaxIntensity = 1.0f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boss|Combat", meta = (ClampMin = "0.0"))
     float NormalAttackRange;
 
@@ -117,6 +136,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Boss|Opening Charge")
     void NotifyOpeningChargeLandedFromAnimation();
 
+    // Call only from the charge montage's actual ground-impact notify.
+    UFUNCTION(BlueprintCallable, Category = "Boss|Charge|Impact")
+    void HandleChargeImpact();
+
     UFUNCTION(BlueprintPure, Category = "Boss|Opening Charge")
     bool IsAnyMontagePlaying() const;
 
@@ -145,6 +168,8 @@ protected:
 
 private:
     void HandleOpeningChargeLanding(bool bWasValidLanding);
+    void ApplyChargeImpactDamage(const FVector& ImpactLocation);
+    void PlayGroundImpactShake(const FVector& ImpactLocation);
     void RecoverFromOpeningCharge(const TCHAR* Reason);
     bool PlayOpeningChargeMontage();
 
@@ -154,5 +179,6 @@ private:
     float OpeningChargeElapsedTime;
     bool bOpeningChargeMontageStarted;
     bool bOpeningChargeLeftGround;
+    bool bChargeImpactHandled = true;
     float ChargeDiagnosticTimeRemaining = 0.0f;
 };

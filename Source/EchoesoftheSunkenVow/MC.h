@@ -61,6 +61,9 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Movement|Dodge", meta = (ClampMin = "1.0"))
         float DodgeSpeed = 800.0f;
 
+    UPROPERTY(EditDefaultsOnly, Category = "Movement|Camera", meta = (ClampMin = "0.0"))
+        float CameraFacingRotationSpeed = 10.0f;
+
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Checkpoint")
         ABantayStatue* CurrentCheckpoint;
 

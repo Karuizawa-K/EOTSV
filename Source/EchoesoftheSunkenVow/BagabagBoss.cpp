@@ -1,6 +1,7 @@
 #include "BagabagBoss.h"
 
 #include "BagabagBossAIController.h"
+#include "MC.h"
 #include "Kismet/GameplayStatics.h"
 #include "StatsComponent.h"
 #include "StoryObjectiveManager.h"
@@ -9,6 +10,11 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Engine/World.h"
+#include "Camera/PlayerCameraManager.h"
+#include "GameFramework/PlayerController.h"
+#include "MatineeCameraShake.h"
 
 ABagabagBoss::ABagabagBoss()
 {
@@ -62,6 +68,7 @@ void ABagabagBoss::BeginPlay()
     OpeningChargeElapsedTime = 0.0f;
     bOpeningChargeMontageStarted = false;
     bOpeningChargeLeftGround = false;
+    bChargeImpactHandled = true;
 
     // Ang Bagabag uses a separate top-center boss UI in a later phase.
     if (EnemyHealthWidgetComponent)
@@ -264,6 +271,7 @@ void ABagabagBoss::MarkDefeated()
 
     BossState = EBagabagBossState::Defeated;
     bOpeningChargeMontageStarted = false;
+    bChargeImpactHandled = true;
     UE_LOG(
         LogTemp,
         Display,
@@ -273,18 +281,160 @@ void ABagabagBoss::MarkDefeated()
 
 void ABagabagBoss::NotifyOpeningChargeLandedFromAnimation()
 {
+    // Preserve existing landing-notify Blueprint wiring. Both entry points
+    // represent the same impact and share the same once-per-charge guard.
+    HandleChargeImpact();
+}
+
+void ABagabagBoss::HandleChargeImpact()
+{
     if (BossState != EBagabagBossState::OpeningCharge
-        || !bOpeningChargeMontageStarted)
+        || !bOpeningChargeMontageStarted
+        || bChargeImpactHandled
+        || !IsValid(StatsComponent)
+        || StatsComponent->bIsDead)
     {
         return;
     }
 
-    UE_LOG(
-        LogTemp,
-        Display,
-        TEXT("[BagabagBoss] Opening charge landing received from animation/Blueprint.")
-    );
+    const UAnimInstance* AnimInstance = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr;
+    // A stopped/interrupted montage can still dispatch queued notifies while
+    // blending out, before OnMontageEnded has recovered the charge state.
+    if (!IsValid(OpeningChargeMontage)
+        || !AnimInstance
+        || !AnimInstance->Montage_IsPlaying(OpeningChargeMontage)
+        || AnimInstance->Montage_GetIsStopped(OpeningChargeMontage))
+    {
+        return;
+    }
+
+    // Consume the impact even on a miss, blocked hit, or successful dodge.
+    // Set this before calling the player or any Blueprint landing event.
+    bChargeImpactHandled = true;
+
+    const UCapsuleComponent* BossCapsule = GetCapsuleComponent();
+    const FVector ImpactLocation = BossCapsule
+        ? BossCapsule->GetComponentLocation()
+            - BossCapsule->GetUpVector() * BossCapsule->GetScaledCapsuleHalfHeight()
+        : GetActorLocation();
+
+    if (bEnableChargeDiagnostics)
+    {
+        UE_LOG(LogTemp, Display,
+            TEXT("[BagabagBoss] Charge impact notify: Origin=%s Radius=%.1f Damage=%.1f"),
+            *ImpactLocation.ToString(), ChargeImpactRadius, ChargeImpactDamage);
+    }
+
+    ApplyChargeImpactDamage(ImpactLocation);
+    // The shared impact guard has already been consumed. Shake independently
+    // of whether the damage helper hit, missed, was blocked, or was dodged.
+    PlayGroundImpactShake(ImpactLocation);
     HandleOpeningChargeLanding(true);
+}
+
+void ABagabagBoss::PlayGroundImpactShake(const FVector& ImpactLocation)
+{
+    if (!GroundImpactShakeClass || !GetWorld()
+        || !FMath::IsFinite(GroundShakeRadius) || GroundShakeRadius <= 0.0f
+        || !FMath::IsFinite(GroundShakeMaxIntensity) || GroundShakeMaxIntensity <= 0.0f)
+    {
+        return;
+    }
+
+    APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+    if (!IsValid(PlayerController) || !PlayerController->IsLocalController())
+    {
+        return;
+    }
+
+    APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager;
+    if (!IsValid(CameraManager))
+    {
+        return;
+    }
+
+    const float Distance = FVector::Dist(ImpactLocation, CameraManager->GetCameraLocation());
+    if (!FMath::IsFinite(Distance) || Distance >= GroundShakeRadius)
+    {
+        return;
+    }
+
+    const float Intensity = GroundShakeMaxIntensity
+        * FMath::Clamp(1.0f - Distance / GroundShakeRadius, 0.0f, 1.0f);
+    if (Intensity > 0.0f)
+    {
+        CameraManager->StartCameraShake(GroundImpactShakeClass, Intensity);
+        if (bEnableChargeDiagnostics)
+        {
+            UE_LOG(LogTemp, Display,
+                TEXT("[BagabagBoss] Ground impact shake: CameraDistance=%.1f Radius=%.1f Intensity=%.3f"),
+                Distance, GroundShakeRadius, Intensity);
+        }
+    }
+}
+
+void ABagabagBoss::ApplyChargeImpactDamage(const FVector& ImpactLocation)
+{
+    AMC* Player = Cast<AMC>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0));
+    if (!IsValid(Player)
+        || !IsValid(Player->StatsComponent)
+        || Player->StatsComponent->bIsDead
+        || Player->StatsComponent->CurrentHealth <= 0.0f
+        || ChargeImpactDamage <= 0.0f
+        || ChargeImpactRadius <= 0.0f)
+    {
+        return;
+    }
+
+    // Test the impact sphere against the capsule, not just the player's
+    // actor center. This also avoids damaging players far above/below impact.
+    const UCapsuleComponent* PlayerCapsule = Player->GetCapsuleComponent();
+    FVector ClosestCapsuleAxisPoint = Player->GetActorLocation();
+    float CapsuleRadius = 0.0f;
+    if (PlayerCapsule)
+    {
+        CapsuleRadius = PlayerCapsule->GetScaledCapsuleRadius();
+        const float HalfAxisLength = FMath::Max(
+            0.0f, PlayerCapsule->GetScaledCapsuleHalfHeight() - CapsuleRadius);
+        const FVector CapsuleCenter = PlayerCapsule->GetComponentLocation();
+        const FVector AxisOffset = PlayerCapsule->GetUpVector() * HalfAxisLength;
+        ClosestCapsuleAxisPoint = FMath::ClosestPointOnSegment(
+            ImpactLocation, CapsuleCenter - AxisOffset, CapsuleCenter + AxisOffset);
+    }
+
+    if (FVector::DistSquared(ImpactLocation, ClosestCapsuleAxisPoint)
+        > FMath::Square(ChargeImpactRadius + CapsuleRadius))
+    {
+        if (bEnableChargeDiagnostics)
+        {
+            UE_LOG(LogTemp, Display, TEXT("[BagabagBoss] Charge impact missed: player capsule outside radius."));
+        }
+        return;
+    }
+
+    if (bChargeImpactRequiresLineOfSight && GetWorld())
+    {
+        FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(BagabagChargeImpact), false, this);
+        QueryParams.AddIgnoredActor(Player);
+        FHitResult BlockingHit;
+        // Start slightly above the capsule foot so a floor-contact tolerance
+        // does not make the supporting floor obstruct an otherwise clear hit.
+        const FVector TraceStart = ImpactLocation + FVector(0.0f, 0.0f, 10.0f);
+        if (GetWorld()->LineTraceSingleByChannel(
+            BlockingHit, TraceStart, Player->GetActorLocation(), ECC_Visibility, QueryParams))
+        {
+            if (bEnableChargeDiagnostics)
+            {
+                UE_LOG(LogTemp, Display, TEXT("[BagabagBoss] Charge impact blocked by %s."),
+                    *GetNameSafe(BlockingHit.GetActor()));
+            }
+            return;
+        }
+    }
+
+    // Keep all player-side dodge invulnerability, health, and Game Over logic
+    // authoritative. Do not apply damage directly to StatsComponent.
+    Player->TakeCombatDamage(ChargeImpactDamage);
 }
 
 bool ABagabagBoss::IsAnyMontagePlaying() const
@@ -366,19 +516,14 @@ void ABagabagBoss::Landed(const FHitResult& Hit)
         return;
     }
 
-    if (!bOpeningChargeLeftGround)
-    {
-        RecoverFromOpeningCharge(TEXT("Landed without a confirmed airborne phase."));
-        return;
-    }
-
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("[BagabagBoss] Opening charge landed successfully at %s."),
+        TEXT("[BagabagBoss] Physics landing at %s; waiting for the montage impact notify (no damage from Landed)."),
         *GetActorLocation().ToString()
     );
-    HandleOpeningChargeLanding(true);
+    // Root-motion playback may touch the floor before the visual slam, or
+    // never leave Walking at all. Only the deliberate notify confirms impact.
 }
 
 void ABagabagBoss::HandleOpeningChargeLanding(bool bWasValidLanding)
@@ -393,6 +538,7 @@ void ABagabagBoss::HandleOpeningChargeLanding(bool bWasValidLanding)
     OpeningChargeElapsedTime = 0.0f;
     bOpeningChargeMontageStarted = false;
     bOpeningChargeLeftGround = false;
+    bChargeImpactHandled = true;
     ChargeCooldownRemaining = FMath::Max(0.0f, ChargeCooldown);
     EnterNormalCombatState();
     OnOpeningChargeLanded();
@@ -421,6 +567,7 @@ void ABagabagBoss::RecoverFromOpeningCharge(const TCHAR* Reason)
     OpeningChargeElapsedTime = 0.0f;
     bOpeningChargeMontageStarted = false;
     bOpeningChargeLeftGround = false;
+    bChargeImpactHandled = true;
     ChargeCooldownRemaining = FMath::Max(0.0f, ChargeCooldown);
 
     if (GetCharacterMovement())
@@ -500,6 +647,7 @@ bool ABagabagBoss::PlayOpeningChargeMontage()
     // and filter by the assigned montage in the handler instead.
     AnimInstance->OnMontageEnded.AddUniqueDynamic(this, &ABagabagBoss::OnOpeningChargeMontageEnded);
 
+    bChargeImpactHandled = false;
     bOpeningChargeMontageStarted = true;
     UE_LOG(
         LogTemp,

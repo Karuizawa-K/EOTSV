@@ -10,7 +10,7 @@ public class EchoesoftheSunkenVow : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "UMG" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "NavigationSystem" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "NavigationSystem", "GameplayCameras" });
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

@@ -23,11 +23,12 @@ AMC::AMC()
 
     StatsComponent = CreateDefaultSubobject<UStatsComponent>(TEXT("StatsComponent"));
 
-    // Allow the controller to rotate the character.
+    // The player is rotated smoothly toward the controller/camera yaw in Tick.
     bUseControllerRotationYaw = false;
 
-    // Rotate the character toward its movement direction.
-    GetCharacterMovement()->bOrientRotationToMovement = true;
+    // Movement remains camera-relative, while facing follows the mouse even
+    // when the player is standing still.
+    GetCharacterMovement()->bOrientRotationToMovement = false;
     GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 
     // Configure the camera to follow controller rotation.
@@ -772,6 +773,28 @@ void AMC::UpdateNPCPrompt()
 void AMC::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+
+    if (Controller
+        && !bIsDodging
+        && !bIsDialogueActive
+        && StatsComponent
+        && !StatsComponent->bIsDead
+        && StatsComponent->CurrentHealth > 0.0f)
+    {
+        const FRotator CurrentRotation = GetActorRotation();
+        const FRotator TargetRotation(
+            0.0f,
+            Controller->GetControlRotation().Yaw,
+            0.0f
+        );
+
+        SetActorRotation(FMath::RInterpTo(
+            FRotator(0.0f, CurrentRotation.Yaw, 0.0f),
+            TargetRotation,
+            DeltaTime,
+            CameraFacingRotationSpeed
+        ));
+    }
 
     if (bIsDodging)
     {
