@@ -30,6 +30,7 @@ private:
     void UpdateBossStateFromPawn(ABagabagBoss* Boss);
     void CheckForOpeningChargeTarget(ABagabagBoss* Boss);
     void CheckForRepeatChargeTarget(ABagabagBoss* Boss);
+    void UpdateNormalMeleeCombat(ABagabagBoss* Boss);
     bool IsPlayerReachable(ABagabagBoss* Boss, APawn* Player) const;
     void LogChargeDiagnostics(ABagabagBoss* Boss) const;
 

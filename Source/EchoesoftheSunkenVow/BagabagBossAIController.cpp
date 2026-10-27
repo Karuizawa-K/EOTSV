@@ -4,6 +4,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "MC.h"
 #include "NavigationPath.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "NavigationSystem.h"
 #include "StatsComponent.h"
 
@@ -95,10 +96,14 @@ void ABagabagBossAIController::Tick(float DeltaSeconds)
     }
     else if (CurrentBossAIState == EBagabagBossState::NormalCombat)
     {
-        // Normal melee behavior is intentionally deferred to Phase C.
-        StopMovement();
-        ClearFocus(EAIFocusPriority::Gameplay);
         CheckForRepeatChargeTarget(Boss);
+
+        // A repeat charge may have transitioned the boss out of NormalCombat.
+        // Do not begin a melee attack on the same frame as that transition.
+        if (Boss->GetBossState() == EBagabagBossState::NormalCombat)
+        {
+            UpdateNormalMeleeCombat(Boss);
+        }
     }
 }
 
@@ -275,6 +280,78 @@ void ABagabagBossAIController::CheckForRepeatChargeTarget(ABagabagBoss* Boss)
             Warning,
             TEXT("[BagabagBossAI] Repeat charge request was rejected by the boss state guard.")
         );
+    }
+}
+
+void ABagabagBossAIController::UpdateNormalMeleeCombat(ABagabagBoss* Boss)
+{
+    if (!Boss)
+    {
+        return;
+    }
+
+    AMC* Player = Cast<AMC>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0));
+    if (!IsValid(Player)
+        || !Player->StatsComponent
+        || Player->StatsComponent->bIsDead)
+    {
+        Boss->CancelMeleeAttack();
+        StopMovement();
+        ClearFocus(EAIFocusPriority::Gameplay);
+        return;
+    }
+
+    const float DetectionRange = FMath::Max(0.0f, Boss->MeleeDetectionRange);
+    if (FVector::DistSquared2D(
+            Boss->GetActorLocation(),
+            Player->GetActorLocation()) > FMath::Square(DetectionRange))
+    {
+        StopMovement();
+        ClearFocus(EAIFocusPriority::Gameplay);
+        return;
+    }
+
+    SetFocus(Player);
+
+    // Keep the boss stationary for the full attack montage. This also keeps
+    // navigation from competing with montage playback or recovery.
+    if (Boss->IsMeleeAttackActive() || Boss->IsAnyMontagePlaying())
+    {
+        StopMovement();
+        return;
+    }
+
+    const float MeleeAttackDistance =
+        Boss->GetMeleeAttackDistanceToTarget(Player);
+    const float DistanceSquared = FVector::DistSquared2D(
+        Boss->GetActorLocation(),
+        Player->GetActorLocation());
+
+    if (DistanceSquared > FMath::Square(MeleeAttackDistance))
+    {
+        // bStopOnOverlap=false is deliberate: MeleeAttackDistance already
+        // includes both capsule radii, so navigation must not add them again.
+        if (GetMoveStatus() != EPathFollowingStatus::Moving)
+        {
+            MoveToActor(Player, MeleeAttackDistance, false);
+        }
+        return;
+    }
+
+    StopMovement();
+
+    FVector ToPlayer = Player->GetActorLocation() - Boss->GetActorLocation();
+    ToPlayer.Z = 0.0f;
+    if (ToPlayer.Normalize())
+    {
+        const FRotator FacingRotation(0.0f, ToPlayer.Rotation().Yaw, 0.0f);
+        SetControlRotation(FacingRotation);
+        Boss->SetActorRotation(FacingRotation);
+    }
+
+    if (Boss->GetMeleeAttackCooldownRemaining() <= KINDA_SMALL_NUMBER)
+    {
+        Boss->StartMeleeAttack();
     }
 }
 

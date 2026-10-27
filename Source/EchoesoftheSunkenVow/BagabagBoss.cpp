@@ -24,6 +24,8 @@ ABagabagBoss::ABagabagBoss()
     DetectionRange = 1200.0f;
     bRequireLineOfSight = true;
     OpeningChargeMontage = nullptr;
+    PunchMontage = nullptr;
+    SwipeMontage = nullptr;
     OpeningChargeDistance = 600.0f;
 
     // Legacy Phase B values retained for Blueprint compatibility. Movement is
@@ -49,6 +51,13 @@ ABagabagBoss::ABagabagBoss()
     OpeningChargeElapsedTime = 0.0f;
     bOpeningChargeMontageStarted = false;
     bOpeningChargeLeftGround = false;
+    ActiveMeleeAttack = EBagabagMeleeAttackType::None;
+    ActiveMeleeMontage = nullptr;
+    MeleeAttackCooldownRemaining = 0.0f;
+    MeleeAttackElapsedTime = 0.0f;
+    bMeleeAttackActive = false;
+    bMeleeAttackImpactHandled = true;
+    bNextMeleeAttackIsPunch = true;
 
     PrimaryActorTick.bCanEverTick = true;
 
@@ -69,6 +78,13 @@ void ABagabagBoss::BeginPlay()
     bOpeningChargeMontageStarted = false;
     bOpeningChargeLeftGround = false;
     bChargeImpactHandled = true;
+    ActiveMeleeAttack = EBagabagMeleeAttackType::None;
+    ActiveMeleeMontage = nullptr;
+    MeleeAttackCooldownRemaining = 0.0f;
+    MeleeAttackElapsedTime = 0.0f;
+    bMeleeAttackActive = false;
+    bMeleeAttackImpactHandled = true;
+    bNextMeleeAttackIsPunch = true;
 
     // Ang Bagabag uses a separate top-center boss UI in a later phase.
     if (EnemyHealthWidgetComponent)
@@ -144,7 +160,8 @@ bool ABagabagBoss::StartOpeningChargeAtLocation(
 
     if (!StatsComponent
         || StatsComponent->bIsDead
-        || IsAnyMontagePlaying())
+        || IsAnyMontagePlaying()
+        || bMeleeAttackActive)
     {
         return false;
     }
@@ -269,6 +286,11 @@ void ABagabagBoss::MarkDefeated()
         GetCharacterMovement()->StopMovementImmediately();
     }
 
+    if (bMeleeAttackActive)
+    {
+        RecoverFromMeleeAttack(TEXT("Boss defeated."));
+    }
+
     BossState = EBagabagBossState::Defeated;
     bOpeningChargeMontageStarted = false;
     bChargeImpactHandled = true;
@@ -332,11 +354,261 @@ void ABagabagBoss::HandleChargeImpact()
     HandleOpeningChargeLanding(true);
 }
 
-void ABagabagBoss::PlayGroundImpactShake(const FVector& ImpactLocation)
+void ABagabagBoss::PlayMeleeImpactShake(float ShakeIntensity)
 {
+    if (IsDefeated())
+    {
+        return;
+    }
+
+    // Melee impact handlers can call this independently of their damage
+    // result. The boss location is the physical source of the impact.
+    PlayGroundImpactShake(GetActorLocation(), ShakeIntensity);
+}
+
+bool ABagabagBoss::StartMeleeAttack()
+{
+    if (BossState != EBagabagBossState::NormalCombat
+        || !IsValid(StatsComponent)
+        || StatsComponent->bIsDead
+        || bMeleeAttackActive
+        || MeleeAttackCooldownRemaining > KINDA_SMALL_NUMBER
+        || IsAnyMontagePlaying())
+    {
+        return false;
+    }
+
+    UAnimInstance* AnimInstance = GetMesh()
+        ? GetMesh()->GetAnimInstance()
+        : nullptr;
+    if (!AnimInstance)
+    {
+        return false;
+    }
+
+    const bool bCanPunch = IsValid(PunchMontage);
+    const bool bCanSwipe = IsValid(SwipeMontage);
+    if (!bCanPunch && !bCanSwipe)
+    {
+        return false;
+    }
+
+    EBagabagMeleeAttackType SelectedAttack = bNextMeleeAttackIsPunch
+        ? EBagabagMeleeAttackType::Punch
+        : EBagabagMeleeAttackType::Swipe;
+
+    if (SelectedAttack == EBagabagMeleeAttackType::Punch && !bCanPunch)
+    {
+        SelectedAttack = EBagabagMeleeAttackType::Swipe;
+    }
+    else if (SelectedAttack == EBagabagMeleeAttackType::Swipe && !bCanSwipe)
+    {
+        SelectedAttack = EBagabagMeleeAttackType::Punch;
+    }
+
+    UAnimMontage* SelectedMontage = SelectedAttack == EBagabagMeleeAttackType::Punch
+        ? PunchMontage
+        : SwipeMontage;
+    if (!IsValid(SelectedMontage))
+    {
+        return false;
+    }
+
+    const float MontageLength = PlayAnimMontage(SelectedMontage);
+    if (MontageLength <= 0.0f)
+    {
+        return false;
+    }
+
+    ActiveMeleeAttack = SelectedAttack;
+    ActiveMeleeMontage = SelectedMontage;
+    MeleeAttackElapsedTime = 0.0f;
+    bMeleeAttackActive = true;
+    bMeleeAttackImpactHandled = false;
+    MeleeAttackCooldownRemaining = FMath::Max(0.0f, MeleeAttackCooldown);
+    bNextMeleeAttackIsPunch = SelectedAttack != EBagabagMeleeAttackType::Punch;
+
+    AnimInstance->OnMontageEnded.AddUniqueDynamic(
+        this,
+        &ABagabagBoss::OnMeleeAttackMontageEnded
+    );
+
+    UE_LOG(
+        LogTemp,
+        Display,
+        TEXT("[BagabagBoss] Melee attack started: %s."),
+        *UEnum::GetValueAsString(ActiveMeleeAttack)
+    );
+    return true;
+}
+
+void ABagabagBoss::CancelMeleeAttack()
+{
+    RecoverFromMeleeAttack(TEXT("Melee attack cancelled."));
+}
+
+void ABagabagBoss::HandleMeleeAttackImpact()
+{
+    if (BossState != EBagabagBossState::NormalCombat
+        || !bMeleeAttackActive
+        || bMeleeAttackImpactHandled
+        || !IsValid(StatsComponent)
+        || StatsComponent->bIsDead
+        || !IsValid(ActiveMeleeMontage))
+    {
+        return;
+    }
+
+    const UAnimInstance* AnimInstance = GetMesh()
+        ? GetMesh()->GetAnimInstance()
+        : nullptr;
+    // A queued notify during montage blending-out is not a valid impact.
+    if (!AnimInstance
+        || !AnimInstance->Montage_IsPlaying(ActiveMeleeMontage)
+        || AnimInstance->Montage_GetIsStopped(ActiveMeleeMontage))
+    {
+        return;
+    }
+
+    const float DamageAmount = ActiveMeleeAttack == EBagabagMeleeAttackType::Punch
+        ? PunchDamage
+        : ActiveMeleeAttack == EBagabagMeleeAttackType::Swipe
+            ? SwipeDamage
+            : 0.0f;
+    const float ShakeIntensity = ActiveMeleeAttack == EBagabagMeleeAttackType::Punch
+        ? PunchShakeIntensity
+        : ActiveMeleeAttack == EBagabagMeleeAttackType::Swipe
+            ? SwipeShakeIntensity
+            : 0.0f;
+
+    if (ActiveMeleeAttack != EBagabagMeleeAttackType::Punch
+        && ActiveMeleeAttack != EBagabagMeleeAttackType::Swipe)
+    {
+        return;
+    }
+
+    // Consume the notify before any range, facing, wall, dodge, or health
+    // validation. The physical impact must shake even when damage is denied.
+    bMeleeAttackImpactHandled = true;
+
+    const FVector ImpactLocation = GetActorLocation();
+    PlayMeleeImpactShake(ShakeIntensity);
+    if (DamageAmount > 0.0f)
+    {
+        ApplyMeleeAttackDamage(ImpactLocation, DamageAmount);
+    }
+}
+
+bool ABagabagBoss::IsMeleeAttackActive() const
+{
+    return bMeleeAttackActive;
+}
+
+float ABagabagBoss::GetMeleeAttackCooldownRemaining() const
+{
+    return MeleeAttackCooldownRemaining;
+}
+
+float ABagabagBoss::GetMeleeAttackDistanceToTarget(const AActor* Target) const
+{
+    if (!Target)
+    {
+        return 0.0f;
+    }
+
+    float AttackDistance = FMath::Max(0.0f, MeleeAttackRange);
+
+    if (const UCapsuleComponent* BossCapsule = GetCapsuleComponent())
+    {
+        AttackDistance += BossCapsule->GetScaledCapsuleRadius();
+    }
+
+    if (const UCapsuleComponent* TargetCapsule =
+        Target->FindComponentByClass<UCapsuleComponent>())
+    {
+        AttackDistance += TargetCapsule->GetScaledCapsuleRadius();
+    }
+
+    return AttackDistance;
+}
+
+void ABagabagBoss::ApplyMeleeAttackDamage(
+    const FVector& ImpactLocation,
+    float DamageAmount
+)
+{
+    AMC* Player = Cast<AMC>(UGameplayStatics::GetPlayerPawn(GetWorld(), 0));
+    if (!IsValid(Player)
+        || !IsValid(Player->StatsComponent)
+        || Player->StatsComponent->bIsDead
+        || Player->StatsComponent->CurrentHealth <= 0.0f
+        || DamageAmount <= 0.0f)
+    {
+        return;
+    }
+
+    const float AttackDistance = GetMeleeAttackDistanceToTarget(Player);
+    if (FVector::DistSquared2D(ImpactLocation, Player->GetActorLocation())
+        > FMath::Square(AttackDistance))
+    {
+        return;
+    }
+
+    FVector ToPlayer = Player->GetActorLocation() - GetActorLocation();
+    ToPlayer.Z = 0.0f;
+    if (bMeleeAttackRequiresLineOfSight
+        || MeleeAttackFacingDot > -1.0f)
+    {
+        if (!ToPlayer.Normalize())
+        {
+            return;
+        }
+    }
+
+    if (MeleeAttackFacingDot > -1.0f
+        && FVector::DotProduct(GetActorForwardVector(), ToPlayer)
+            < MeleeAttackFacingDot)
+    {
+        return;
+    }
+
+    if (bMeleeAttackRequiresLineOfSight && GetWorld())
+    {
+        FCollisionQueryParams QueryParams(
+            SCENE_QUERY_STAT(BagabagMeleeAttack),
+            false,
+            this
+        );
+        QueryParams.AddIgnoredActor(Player);
+
+        FHitResult BlockingHit;
+        const FVector TraceStart = GetActorLocation();
+        const FVector TraceEnd = Player->GetActorLocation();
+        if (GetWorld()->LineTraceSingleByChannel(
+            BlockingHit,
+            TraceStart,
+            TraceEnd,
+            ECC_Visibility,
+            QueryParams))
+        {
+            return;
+        }
+    }
+
+    // Keep player-side dodge invulnerability, health, and Game Over logic
+    // authoritative.
+    Player->TakeCombatDamage(DamageAmount);
+}
+
+void ABagabagBoss::PlayGroundImpactShake(const FVector& ImpactLocation, float ShakeIntensity)
+{
+    const float EffectiveShakeIntensity = ShakeIntensity >= 0.0f
+        ? ShakeIntensity
+        : GroundShakeMaxIntensity;
+
     if (!GroundImpactShakeClass || !GetWorld()
         || !FMath::IsFinite(GroundShakeRadius) || GroundShakeRadius <= 0.0f
-        || !FMath::IsFinite(GroundShakeMaxIntensity) || GroundShakeMaxIntensity <= 0.0f)
+        || !FMath::IsFinite(EffectiveShakeIntensity) || EffectiveShakeIntensity <= 0.0f)
     {
         return;
     }
@@ -359,7 +631,7 @@ void ABagabagBoss::PlayGroundImpactShake(const FVector& ImpactLocation)
         return;
     }
 
-    const float Intensity = GroundShakeMaxIntensity
+    const float Intensity = EffectiveShakeIntensity
         * FMath::Clamp(1.0f - Distance / GroundShakeRadius, 0.0f, 1.0f);
     if (Intensity > 0.0f)
     {
@@ -454,6 +726,25 @@ void ABagabagBoss::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
 
+    const float SafeDeltaSeconds = FMath::Max(0.0f, DeltaSeconds);
+
+    if (MeleeAttackCooldownRemaining > 0.0f)
+    {
+        MeleeAttackCooldownRemaining = FMath::Max(
+            0.0f,
+            MeleeAttackCooldownRemaining - SafeDeltaSeconds
+        );
+    }
+
+    if (bMeleeAttackActive)
+    {
+        MeleeAttackElapsedTime += SafeDeltaSeconds;
+        if (MeleeAttackElapsedTime >= FMath::Max(0.1f, MeleeAttackRecoveryTimeout))
+        {
+            RecoverFromMeleeAttack(TEXT("Melee attack recovery timeout."));
+        }
+    }
+
     ChargeDiagnosticTimeRemaining -= FMath::Max(0.0f, DeltaSeconds);
     if (bEnableChargeDiagnostics && ChargeDiagnosticTimeRemaining <= 0.0f)
     {
@@ -492,7 +783,7 @@ void ABagabagBoss::Tick(float DeltaSeconds)
         return;
     }
 
-    OpeningChargeElapsedTime += FMath::Max(0.0f, DeltaSeconds);
+    OpeningChargeElapsedTime += SafeDeltaSeconds;
 
     if (GetCharacterMovement()
         && !GetCharacterMovement()->IsMovingOnGround())
@@ -686,6 +977,56 @@ void ABagabagBoss::OnOpeningChargeMontageEnded(
             TEXT("Opening charge montage completed without a confirmed landing.")
         );
     }
+}
+
+void ABagabagBoss::RecoverFromMeleeAttack(const TCHAR* Reason)
+{
+    if (!bMeleeAttackActive)
+    {
+        return;
+    }
+
+    UAnimInstance* AnimInstance = GetMesh()
+        ? GetMesh()->GetAnimInstance()
+        : nullptr;
+    UAnimMontage* MontageToStop = ActiveMeleeMontage;
+
+    bMeleeAttackActive = false;
+    bMeleeAttackImpactHandled = true;
+    ActiveMeleeAttack = EBagabagMeleeAttackType::None;
+    ActiveMeleeMontage = nullptr;
+    MeleeAttackElapsedTime = 0.0f;
+
+    if (AnimInstance
+        && IsValid(MontageToStop)
+        && AnimInstance->Montage_IsPlaying(MontageToStop))
+    {
+        AnimInstance->Montage_Stop(0.1f, MontageToStop);
+    }
+
+    UE_LOG(
+        LogTemp,
+        Display,
+        TEXT("[BagabagBoss] Melee attack recovered: %s."),
+        Reason
+    );
+}
+
+void ABagabagBoss::OnMeleeAttackMontageEnded(
+    UAnimMontage* Montage,
+    bool bInterrupted
+)
+{
+    if (!bMeleeAttackActive || Montage != ActiveMeleeMontage)
+    {
+        return;
+    }
+
+    RecoverFromMeleeAttack(
+        bInterrupted
+            ? TEXT("Melee attack montage interrupted.")
+            : TEXT("Melee attack montage completed.")
+    );
 }
 
 void ABagabagBoss::NotifyBossDefeatedOnce()
